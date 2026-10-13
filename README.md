@@ -1,7 +1,8 @@
-# HR Attrition Intelligence
+# HR Attrition IQ
 
 Premium Streamlit workforce analytics dashboard using Snowflake, Plotly, and the existing Random Forest model bundle.
 
+Live Project Link = https://hr-attrition-iq-fz7cy8ubamq9xq3jff4qib.streamlit.app/
 ## Project layout
 
 ```text
