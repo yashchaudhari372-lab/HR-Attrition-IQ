@@ -11,7 +11,7 @@ A Streamlit workforce analytics dashboard for exploring employee attrition patte
 
 Employee attrition can lead to recruitment costs, loss of organizational knowledge, and disruption to teams. HR Attrition IQ provides an interactive dashboard to explore workforce metrics and understand how attrition varies across departments, job roles, overtime, income, job satisfaction, performance ratings, age groups, tenure, and commute distance.
 
-The project includes three dashboard views: **Executive Overview**, **Attrition Drivers**, and **Risk Segmentation & Action List**. These views help users explore patterns and identify areas for further HR investigation.
+The project includes three dashboard views: **Executive Overview**, **Attrition Drivers**, and **Risk Segmentation & Action List**. These views help users explore patterns and identify areas for further HR investigation..
 
 > This dashboard is a decision-support and analytics tool. Risk indicators are not guarantees that an employee will leave and should not be used as the sole basis for employment decisions.
 
