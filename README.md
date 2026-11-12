@@ -1,4 +1,4 @@
-# HR Attrition Intelligence | HR Attrition IQ
+# HR Attrition Intelligence | HR Attrition IQ.
 
 A Streamlit workforce analytics dashboard for exploring employee attrition patterns, potential contributing factors, and employee risk segments. The project uses Python, Pandas, Plotly, Snowflake connectivity, and a saved Random Forest model artifact.
 
