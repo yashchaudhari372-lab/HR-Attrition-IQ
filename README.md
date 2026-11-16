@@ -3,7 +3,8 @@
 A Streamlit workforce analytics dashboard for exploring employee attrition patterns, potential contributing factors, and employee risk segments. The project uses Python, Pandas, Plotly, Snowflake connectivity, and a saved Random Forest model artifact.
 
 🌐 **Live Dashboard:** [Open HR Attrition IQ](https://hr-attrition-iq-fz7cy8ubamq9xq3jff4qib.streamlit.app/)  
-💻 **GitHub Repository:** [HR-Attrition-IQ](https://github.com/yashchaudhari372-lab/HR-Attrition-IQ)
+💻 **GitHub Repository:** [HR-Attrition-IQ](https://github.com/yashchaudhari372-lab/HR-Attrition-IQ)  
+📊 **Power BI Dashboard Repo:** [HR-Attrition-PowerBI-Dashboard](https://github.com/yashchaudhari372-lab/HR-Attrition-PowerBI-Dashboard)
 
 ---
 
