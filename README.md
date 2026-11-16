@@ -102,6 +102,8 @@ hr_attrition_intelligence/
 │   └── salary_vs_attrition.png
 ├── scripts/
 │   └── generate_sample_data.py     # Utility script to reproduce the 4,700-row workforce dataset
+├── powerbi/
+│   └── AttritionIQ_HR_Attrition_Intelligence_Final.pbix # Complete Power BI dashboard file
 ├── src/
 │   ├── connect_snowflake.py        # Connection tester with graceful fallback
 │   ├── eda.py                      # Exploratory data analysis runner
