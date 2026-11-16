@@ -29,12 +29,25 @@ THEMES = {
     "Sunset Analytics": {"bg":"#1A1024","panel":"#281632","sidebar":"#130B1C","text":"#FFF7FB","muted":"#D0B7D0","border":"#4A2A4B","blue":"#8B5CF6","purple":"#C084FC","cyan":"#FB7185","green":"#34D399","amber":"#F97316","red":"#EF4444","plot":"#281632"},
 }
 ATTRITION_COLORS = {"No": "#3B82F6", "Yes": "#EF4444"}
-MODEL_PATHS = [Path("models/attrition_model.pkl"), Path("attrition_model.pkl")]
+MODEL_PATHS = [
+    Path("models/attrition_model.pkl"),
+    Path("attrition_model.pkl"),
+    Path(__file__).resolve().parent / "models" / "attrition_model.pkl",
+    Path(__file__).resolve().parent / "attrition_model.pkl",
+]
+LOCAL_DATA_PATHS = [
+    Path("data/hr_attrition_final.csv"),
+    Path("hr_attrition_final.csv"),
+    Path(__file__).resolve().parent / "data" / "hr_attrition_final.csv",
+    Path(__file__).resolve().parent / "hr_attrition_final.csv",
+]
 
 if "theme_name" not in st.session_state:
     st.session_state.theme_name = "Midnight Multicolour"
 if "active_page" not in st.session_state:
     st.session_state.active_page = "Overview Dashboard"
+if "data_mode" not in st.session_state:
+    st.session_state.data_mode = "auto"
 
 T = THEMES.get(st.session_state.theme_name, THEMES["Midnight Multicolour"])
 st.markdown(f"""
@@ -83,26 +96,109 @@ def load_model(path_string):
         return pickle.load(f)
 
 
-@st.cache_data(ttl=600, show_spinner=False)
-def load_data():
-    required = ["SNOWFLAKE_USER", "SNOWFLAKE_PASSWORD", "SNOWFLAKE_ACCOUNT", "SNOWFLAKE_WAREHOUSE", "SNOWFLAKE_DATABASE", "SNOWFLAKE_SCHEMA"]
-    missing = [key for key in required if not os.getenv(key)]
-    if missing:
-        raise RuntimeError("Snowflake configuration is incomplete. Set the required environment variables in .env or Streamlit secrets.")
-    if snowflake is None:
-        raise RuntimeError("snowflake-connector-python is not installed. Install requirements.txt and retry.")
-    conn = None
+def get_secret(key, default=None):
+    if key in os.environ and os.environ[key]:
+        return os.environ[key]
     try:
-        conn = snowflake.connector.connect(
-            user=os.getenv("SNOWFLAKE_USER"), password=os.getenv("SNOWFLAKE_PASSWORD"),
-            account=os.getenv("SNOWFLAKE_ACCOUNT"), warehouse=os.getenv("SNOWFLAKE_WAREHOUSE"),
-            database=os.getenv("SNOWFLAKE_DATABASE"), schema=os.getenv("SNOWFLAKE_SCHEMA"),
-            login_timeout=20, network_timeout=30,
-        )
+        if hasattr(st, "secrets") and key in st.secrets:
+            return str(st.secrets[key])
+    except Exception:
+        pass
+    return default
+
+
+def _load_local_csv():
+    for path in LOCAL_DATA_PATHS:
+        if path.exists():
+            df = pd.read_csv(path)
+            if not df.empty:
+                return df, path
+    raise FileNotFoundError("Bundled dataset 'data/hr_attrition_final.csv' could not be found.")
+
+
+def _query_snowflake():
+    conn = snowflake.connector.connect(
+        user=get_secret("SNOWFLAKE_USER"),
+        password=get_secret("SNOWFLAKE_PASSWORD"),
+        account=get_secret("SNOWFLAKE_ACCOUNT"),
+        warehouse=get_secret("SNOWFLAKE_WAREHOUSE"),
+        database=get_secret("SNOWFLAKE_DATABASE"),
+        schema=get_secret("SNOWFLAKE_SCHEMA"),
+        login_timeout=15,
+        network_timeout=20,
+    )
+    try:
         return pd.read_sql_query("SELECT * FROM hr_attrition_final", conn)
     finally:
-        if conn is not None:
-            conn.close()
+        conn.close()
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def load_data(mode="auto"):
+    """
+    Loads workforce data with smart cloud resilience:
+    - mode="auto": Attempts Snowflake first. If Snowflake succeeds, returns (df, meta).
+      If Snowflake fails (free trial expired, warehouse suspended, network timeout,
+      auth error, missing secrets), seamlessly falls back to the bundled offline dataset.
+    - mode="local": Always loads the bundled offline dataset.
+    - mode="snowflake": Strictly connects to Snowflake and raises any errors.
+    """
+    required = ["SNOWFLAKE_USER", "SNOWFLAKE_PASSWORD", "SNOWFLAKE_ACCOUNT", "SNOWFLAKE_WAREHOUSE", "SNOWFLAKE_DATABASE", "SNOWFLAKE_SCHEMA"]
+    has_creds = all(get_secret(key) for key in required)
+
+    if mode == "local":
+        df, local_path = _load_local_csv()
+        return df, {
+            "source": "local",
+            "error": None,
+            "file_path": str(local_path),
+            "message": "Loaded bundled local dataset."
+        }
+
+    if mode == "snowflake":
+        if not has_creds:
+            missing = [k for k in required if not get_secret(k)]
+            raise RuntimeError(f"Snowflake configuration is incomplete. Missing: {', '.join(missing)}")
+        if snowflake is None:
+            raise RuntimeError("snowflake-connector-python is not installed.")
+        df = _query_snowflake()
+        return df, {
+            "source": "snowflake",
+            "error": None,
+            "file_path": None,
+            "message": "Live connection to Snowflake virtual warehouse"
+        }
+
+    # mode == "auto": try Snowflake first, fall back to local CSV on any error
+    sf_error = None
+    if has_creds and snowflake is not None:
+        try:
+            df = _query_snowflake()
+            return df, {
+                "source": "snowflake",
+                "error": None,
+                "file_path": None,
+                "message": "Live connection to Snowflake virtual warehouse"
+            }
+        except Exception as exc:
+            sf_error = str(exc)
+    elif not has_creds:
+        sf_error = "Snowflake credentials not configured in environment or Streamlit secrets."
+    else:
+        sf_error = "snowflake-connector-python library not installed."
+
+    try:
+        df, local_path = _load_local_csv()
+        return df, {
+            "source": "local_fallback",
+            "error": sf_error,
+            "file_path": str(local_path),
+            "message": "Loaded bundled offline dataset (Snowflake warehouse offline or trial ended)"
+        }
+    except Exception as local_exc:
+        if sf_error:
+            raise RuntimeError(f"Snowflake connection failed ({sf_error}) and local fallback failed ({local_exc})")
+        raise local_exc
 
 
 def safe_num(series, default=0):
@@ -263,6 +359,29 @@ with st.sidebar:
     st.divider()
     st.caption("APPEARANCE")
     st.selectbox("Dashboard theme", list(THEMES), key="theme_name")
+    
+    st.divider()
+    st.caption("DATA CONNECTION")
+    mode_options = {
+        "auto": "Auto (Snowflake + Fallback)",
+        "local": "Local Offline Dataset",
+        "snowflake": "Snowflake Live Only",
+    }
+    selected_mode = st.selectbox(
+        "Source Mode",
+        options=["auto", "local", "snowflake"],
+        format_func=lambda x: mode_options.get(x, x),
+        index=["auto", "local", "snowflake"].index(st.session_state.get("data_mode", "auto")),
+        key="data_mode_select"
+    )
+    if selected_mode != st.session_state.get("data_mode", "auto"):
+        st.session_state.data_mode = selected_mode
+        load_data.clear()
+        st.rerun()
+
+    # Dynamic status badge placeholder in sidebar
+    status_box = st.empty()
+
     if st.button("↻ Refresh data", use_container_width=True):
         load_data.clear()
         st.rerun()
@@ -273,16 +392,38 @@ T = THEMES[st.session_state.theme_name]
 
 st.markdown(f'<div class="hai-hero"><div class="hai-eyebrow">WORKFORCE INTELLIGENCE PLATFORM</div><h1>{page}</h1><p>Workforce Analytics&nbsp; | &nbsp;Employee Retention Insights&nbsp; | &nbsp;AI-Powered Attrition Prediction</p></div>', unsafe_allow_html=True)
 
-with st.spinner("Loading the latest workforce data from Snowflake…"):
+with st.spinner("Loading workforce analytics dataset…"):
     try:
-        raw_df = load_data()
+        raw_df, source_meta = load_data(mode=st.session_state.get("data_mode", "auto"))
         df = clean_df(raw_df)
     except Exception as exc:
-        st.error("Unable to load workforce data from Snowflake.")
-        st.caption("Check your .env / Streamlit secrets, network access, database permissions, and the hr_attrition_final table. Credentials are not displayed here.")
+        st.error("Unable to load workforce data.")
+        st.caption("Check your database connection, credentials, or local data/hr_attrition_final.csv file.")
         with st.expander("Technical details"):
             st.code(f"{type(exc).__name__}: {str(exc)[:500]}")
         st.stop()
+
+# Update sidebar status badge now that source_meta is resolved
+if source_meta.get("source") == "snowflake":
+    status_box.success("🟢 Live Snowflake Connected", icon="✅")
+elif source_meta.get("source") == "local_fallback":
+    status_box.warning("🟡 Offline Fallback Active", icon="⚠️")
+else:
+    status_box.info("🔵 Bundled Dataset Active", icon="📁")
+
+# Graceful Snowflake notification if in fallback mode
+if source_meta.get("source") == "local_fallback" and source_meta.get("error"):
+    sf_err = str(source_meta["error"])
+    is_trial_ended = "390913" in sf_err or "free trial has ended" in sf_err.lower() or "suspended" in sf_err.lower()
+    with st.expander("ℹ️ Snowflake Status: Offline Fallback Mode Active (Click for details)", expanded=False):
+        if is_trial_ended:
+            st.warning("⚠️ **Snowflake Notice:** The Snowflake free trial has ended and virtual warehouses are suspended (Error code `390913`).")
+            st.info("💡 **Automatic Fallback Active:** To ensure zero downtime for viewers and portfolio recruiters, the dashboard automatically loaded the bundled offline workforce dataset (`data/hr_attrition_final.csv`). All 4,700 employee records, predictive models, interactive charts, and exports are fully operational.")
+            st.caption("To re-enable live Snowflake queries, add billing or create a new Snowflake trial account, then update your Streamlit Secrets / .env.")
+        else:
+            st.warning("⚠️ **Snowflake Notice:** Live Snowflake query was unsuccessful.")
+            st.info("💡 Loaded bundled offline workforce dataset (`data/hr_attrition_final.csv`). All analytics and predictions remain fully available.")
+        st.code(f"Snowflake Response: {sf_err[:400]}")
 
 if df.empty:
     st.warning("The Snowflake table returned no records. The dashboard needs data to calculate metrics and charts.")
@@ -467,6 +608,54 @@ elif page == "Employee Insights":
     st.markdown("- Validate workload and overtime patterns with employee feedback and team-level context.\n- Review onboarding, career progression and manager support for groups with elevated observed attrition.\n- Examine pay bands and internal equity with appropriate privacy safeguards.\n- Track engagement and job satisfaction over time; use aggregated results where possible.\n- Treat analytics as a prompt for supportive investigation, not as the sole basis for individual employment decisions.")
     st.caption("Insights are descriptive associations from the current filtered dataset. They do not establish why employees leave.")
 
+    st.divider()
+    st.subheader("Employee Risk Segmentation & Action List")
+    st.caption("Identifies workforce risk segments using multi-factor indicators (Overtime, Income, Distance, Satisfaction, Tenure) to prompt supportive retention review.")
+
+    def _calc_rf(row):
+        score = 0
+        if str(row.get("OVERTIME", "")).strip().title() == "Yes": score += 1
+        if safe_num(pd.Series([row.get("MONTHLY_INCOME", 100000)])).iloc[0] < 45000: score += 1
+        if safe_num(pd.Series([row.get("DISTANCE_FROM_HOME", 0)])).iloc[0] >= 21: score += 1
+        if safe_num(pd.Series([row.get("JOB_SATISFACTION", 4)])).iloc[0] <= 2: score += 1
+        if safe_num(pd.Series([row.get("YEARS_AT_COMPANY", 10)])).iloc[0] <= 1: score += 1
+        return score
+
+    seg_df = filtered.copy()
+    if not seg_df.empty:
+        seg_df["RISK_FACTORS"] = seg_df.apply(_calc_rf, axis=1)
+        high_risk_all = seg_df[seg_df["RISK_FACTORS"] >= 2]
+        active_high_risk = seg_df[(seg_df["RISK_FACTORS"] >= 2) & (seg_df["ATTRITION"] == "No")]
+
+        r1, r2, r3 = st.columns(3)
+        r1.metric("High-Risk Employees (2+ factors)", f"{len(high_risk_all):,}", help="Employees exhibiting 2 or more combined risk factors")
+        r2.metric("Active High-Risk Employees", f"{len(active_high_risk):,}", help="Retained employees in the high-risk segment requiring retention focus")
+        hr_rate = len(seg_df[seg_df["ATTRITION"] == "Yes"]) / len(seg_df) * 100 if len(seg_df) else 0
+        r3.metric("Observed Attrition in Selection", f"{hr_rate:.1f}%")
+
+        rf_agg = seg_df.assign(_left=(seg_df["ATTRITION"] == "Yes").astype(int)).groupby("RISK_FACTORS").agg(
+            Employees=("ATTRITION", "size"), Left=("_left", "sum")
+        ).reset_index()
+        rf_agg["Attrition Rate"] = np.where(rf_agg["Employees"] > 0, rf_agg["Left"] / rf_agg["Employees"] * 100, 0)
+
+        fig_rf = px.bar(
+            rf_agg, x="RISK_FACTORS", y="Attrition Rate",
+            text=rf_agg["Attrition Rate"].map(lambda x: f"{x:.1f}%"),
+            color="Attrition Rate",
+            color_continuous_scale=[T["cyan"], T["amber"], T["red"]],
+            title="Attrition Rate by Number of Combined Risk Factors"
+        )
+        show_chart(chart_layout(fig_rf, height=340), "risk_factors_chart")
+
+        st.markdown("#### High-Risk Retained Employee Action List")
+        st.caption("Active employees matching current filters with 2+ risk indicators. Review workload and compensation equity.")
+        action_cols = [c for c in ["EMP_ID", "DEPARTMENT", "JOB_ROLE", "RISK_FACTORS", "MONTHLY_INCOME", "YEARS_AT_COMPANY", "OVERTIME", "JOB_SATISFACTION", "DISTANCE_FROM_HOME"] if c in active_high_risk.columns]
+        if not active_high_risk.empty:
+            display_tbl = active_high_risk.sort_values(by=["RISK_FACTORS", "MONTHLY_INCOME"], ascending=[False, True])[action_cols].head(50)
+            st.dataframe(display_tbl, use_container_width=True, hide_index=True)
+        else:
+            st.info("No active employees with 2+ risk factors found in the active filter selection.")
+
 # ---------- Reports ----------
 elif page == "Reports & Downloads":
     st.subheader("Reports and data exports")
@@ -505,12 +694,16 @@ elif page == "Settings":
         st.markdown('<div class="hai-card" style="margin-top:12px"><b>Privacy and security</b><p class="hai-muted">Credentials are read from environment variables or Streamlit secrets and are not shown in the UI. Avoid committing .env, model artifacts containing sensitive information, or employee exports to public repositories.</p></div>', unsafe_allow_html=True)
     with b:
         st.markdown('<div class="hai-card"><b>Data connection</b>', unsafe_allow_html=True)
-        st.write("Source: Snowflake")
-        st.write("Table: `hr_attrition_final`")
+        is_sf = source_meta.get("source") == "snowflake"
+        st.write(f"Active Source: **{'Snowflake (Live)' if is_sf else 'Bundled Offline Dataset (Fallback)'}**")
+        st.write(f"Target: `{'hr_attrition_final (Snowflake Table)' if is_sf else source_meta.get('file_path', 'data/hr_attrition_final.csv')}`")
         st.write(f"Rows loaded: **{len(df):,}**")
         st.write(f"Columns loaded: **{len(df.columns)}**")
         st.write(f"Last page load: **{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}**")
         st.write(f"Model file: **{str(model_path) if model_path else 'Not found'}**")
+        if source_meta.get("error"):
+            with st.expander("Snowflake Diagnostic Message"):
+                st.code(source_meta["error"][:500])
         if st.button("Clear cached data and reload", type="primary"):
             load_data.clear(); st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)

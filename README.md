@@ -92,16 +92,20 @@ These are descriptive patterns from the displayed dashboard data; they do not pr
 ```text
 hr_attrition_intelligence/
 ├── .venv/                         # Local virtual environment; do not commit
+├── data/
+│   └── hr_attrition_final.csv      # Bundled workforce dataset (4,700 records; offline fallback)
 ├── models/
-│   └── attrition_model.pkl         # Saved model artifact
+│   └── attrition_model.pkl         # Saved Random Forest model artifact
 ├── outputs/
 │   ├── attrition_by_department.png
 │   ├── attrition_by_overtime.png
 │   └── salary_vs_attrition.png
+├── scripts/
+│   └── generate_sample_data.py     # Utility script to reproduce the 4,700-row workforce dataset
 ├── src/
-│   ├── connect_snowflake.py
-│   ├── eda.py
-│   └── train_model.py
+│   ├── connect_snowflake.py        # Connection tester with graceful fallback
+│   ├── eda.py                      # Exploratory data analysis runner
+│   └── train_model.py              # ML model trainer with SMOTE & tuning
 ├── assets/
 │   └── dashboard/
 │       ├── executive-overview.jpg
@@ -109,8 +113,8 @@ hr_attrition_intelligence/
 │       └── risk-segmentation-action-list.jpg
 ├── .env                            # Local secrets; do not commit
 ├── .gitignore
-├── app.py
-├── main.py
+├── app.py                          # Streamlit application with cloud resilience
+├── main.py                         # Full pipeline runner
 ├── README.md
 └── requirements.txt
 ```
@@ -167,6 +171,20 @@ streamlit run app.py
 ```
 
 If your intended entry point is `main.py`, use `streamlit run main.py` instead. Use the entry point that matches your current app setup.
+
+## 🔄 Dual-Mode Data Architecture & Zero-Downtime Resilience
+
+The application is engineered with high availability and resilience:
+
+1. **Snowflake Live Mode:** When valid Snowflake credentials and active warehouses are configured (in `.env` locally or in Streamlit Cloud Secrets), the application queries live data from the `hr_attrition_final` table.
+2. **Automatic Offline Fallback:** If Snowflake is unreachable, credentials are not configured, or the **Snowflake Free Trial has ended (DatabaseError 390913: virtual warehouses suspended)**, the dashboard automatically transitions to the bundled high-fidelity 4,700-row workforce dataset (`data/hr_attrition_final.csv`).
+3. **Zero Downtime for Portfolio Visitors:** The live Streamlit Cloud app remains 100% functional, interactive, and responsive even if trial cloud warehouses expire.
+4. **Source Toggle:** Users can switch between `Auto (Snowflake + Fallback)`, `Local Offline Dataset`, and `Snowflake Live Only` directly from the sidebar.
+
+### Troubleshooting Snowflake Error 390913
+If you see error code `390913 (08001): Failed to login: Login error: Your free trial has ended and all of your virtual warehouses have been suspended`:
+* **For Portfolio Viewers / Recruiter Demos:** No action is needed! The app automatically runs in fallback mode with the complete 4,700-record dataset.
+* **To Re-enable Live Snowflake Queries:** Log into the Snowflake Web UI, add billing information (or spin up a new trial account), update your warehouse name in `.env` or Streamlit Secrets, and click `↻ Refresh data` in the sidebar.
 
 ## 🚀 Live Deployment
 

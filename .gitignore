@@ -5,4 +5,5 @@ __pycache__/
 *.py[cod]
 outputs/
 *.csv
+!data/hr_attrition_final.csv
 *.xlsx
